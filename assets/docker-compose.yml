@@ -1,0 +1,167 @@
+version: '3.8'
+
+services:
+  # ============================================
+  # Nginx Proxy (反向代理)
+  # ============================================
+  nginx-proxy:
+    image: nginxproxy/nginx-proxy:latest
+    container_name: nginx-proxy
+    environment:
+      - TZ=Asia/Taipei
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/tmp/docker.sock:ro
+      - nginx-certs:/etc/nginx/certs
+      - nginx-vhost:/etc/nginx/vhost.d
+      - nginx-html:/usr/share/nginx/html
+    networks:
+      - linebot-network
+    restart: unless-stopped
+
+  # ============================================
+  # ACME Companion (Let's Encrypt 自動 SSL)
+  # ============================================
+  acme-companion:
+    image: nginxproxy/acme-companion:latest
+    container_name: acme-companion
+    volumes:
+      - /var/run/docker.sock:/tmp/docker.sock:ro
+      - nginx-certs:/etc/nginx/certs
+      - nginx-vhost:/etc/nginx/vhost.d
+      - nginx-html:/usr/share/nginx/html
+      - acme-data:/etc/acme.sh
+    environment:
+      - TZ=Asia/Taipei
+      - DEFAULT_EMAIL=${ACME_EMAIL:-admin@example.com}
+      - NGINX_PROXY_CONTAINER=nginx-proxy
+    networks:
+      - linebot-network
+    restart: unless-stopped
+
+  # ============================================
+  # LINE Webhook 服務
+  # ============================================
+  webhook:
+    build: ./webhook
+    container_name: line-webhook
+    expose:
+      - "3000"
+    environment:
+      - TZ=Asia/Taipei
+      - NODE_ENV=production
+      - PORT=3000
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_NAME=linebot
+      - DB_USER=linebot
+      - DB_PASSWORD=${DB_PASSWORD:-linebot123}
+      - LINE_CHANNEL_ACCESS_TOKEN=${LINE_CHANNEL_ACCESS_TOKEN}
+      - LINE_CHANNEL_SECRET=${LINE_CHANNEL_SECRET}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL}
+      - LLM_MODEL=${LLM_MODEL}
+      - USE_OLLAMA_EMBEDDINGS=${USE_OLLAMA_EMBEDDINGS}
+      - OLLAMA_API_URL=${OLLAMA_API_URL}
+      - OLLAMA_EMBEDDING_MODEL=${OLLAMA_EMBEDDING_MODEL}
+      - USE_GEMINI_EMBEDDINGS=${USE_GEMINI_EMBEDDINGS}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL}
+      - OWNER_USER_IDS=${OWNER_USER_IDS}
+      - AUTO_REPLY_KEYWORDS=${AUTO_REPLY_KEYWORDS}
+      - KNOWLEDGE_BASE_DIR=/app/knowledge
+      # nginx-proxy 設定
+      - VIRTUAL_HOST=${DOMAIN}
+      - VIRTUAL_PORT=3000
+      # Let's Encrypt 設定
+      - LETSENCRYPT_HOST=${DOMAIN}
+      - LETSENCRYPT_EMAIL=${ACME_EMAIL}
+    volumes:
+      - ./knowledge:/app/knowledge:ro
+      - ./logs:/app/logs
+    depends_on:
+      mysql:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      nginx-proxy:
+        condition: service_started
+    networks:
+      - linebot-network
+    restart: unless-stopped
+
+  # ============================================
+  # MySQL - 儲存對話記錄、用戶資料
+  # ============================================
+  mysql:
+    image: mysql:8.0
+    container_name: line-mysql
+    environment:
+      - TZ=Asia/Taipei
+      - MYSQL_ROOT_PASSWORD=${DB_ROOT_PASSWORD:-root123}
+      - MYSQL_DATABASE=linebot
+      - MYSQL_USER=linebot
+      - MYSQL_PASSWORD=${DB_PASSWORD:-linebot123}
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - linebot-network
+    restart: unless-stopped
+
+  # ============================================
+  # Qdrant - 向量資料庫
+  # ============================================
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: line-qdrant
+    environment:
+      - TZ=Asia/Taipei
+    volumes:
+      - qdrant-data:/qdrant/storage
+    networks:
+      - linebot-network
+    restart: unless-stopped
+
+  # ============================================
+  # Indexer - 知識庫索引服務
+  # ============================================
+  indexer:
+    build: ./indexer
+    container_name: line-indexer
+    environment:
+      - TZ=Asia/Taipei
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL}
+      - USE_OLLAMA_EMBEDDINGS=${USE_OLLAMA_EMBEDDINGS}
+      - OLLAMA_API_URL=${OLLAMA_API_URL}
+      - OLLAMA_EMBEDDING_MODEL=${OLLAMA_EMBEDDING_MODEL}
+      - USE_GEMINI_EMBEDDINGS=${USE_GEMINI_EMBEDDINGS}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL}
+      - KNOWLEDGE_BASE_DIR=/app/knowledge
+    volumes:
+      - ./knowledge:/app/knowledge
+    depends_on:
+      - qdrant
+    networks:
+      - linebot-network
+    restart: unless-stopped
+
+volumes:
+  mysql-data:
+  qdrant-data:
+  nginx-certs:
+  nginx-vhost:
+  nginx-html:
+  acme-data:
+
+networks:
+  linebot-network:
+    driver: bridge

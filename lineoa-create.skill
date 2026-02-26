@@ -1,0 +1,160 @@
+{
+  "name": "lineoa-create",
+  "version": "1.0.0",
+  "description": "LINE Official Account 客服機器人建置 SKILL - 整合 RAG 知識庫、語氣模仿、自動回覆",
+  "author": "Ken Chen <ken@sylksoft.com>",
+  "license": "MIT",
+  "keywords": [
+    "line",
+    "line-bot",
+    "rag",
+    "chatbot",
+    "customer-service",
+    "bge-m3",
+    "gemini",
+    "qdrant"
+  ],
+  "category": "chatbot",
+  "requirements": {
+    "docker": ">=20.0",
+    "docker-compose": ">=2.0",
+    "hardware": {
+      "cpu": "4 cores",
+      "ram": "8GB",
+      "disk": "50GB"
+    },
+    "external": {
+      "gpu_server": {
+        "description": "用於運行 BGE-m3 embedding 模型",
+        "requirements": {
+          "gpu": "NVIDIA GTX 1070 或以上",
+          "ram": "32GB"
+        },
+        "optional": true,
+        "alternative": "可使用 OpenAI text-embedding-3-small（付費）"
+      }
+    },
+    "apis": [
+      {
+        "name": "LINE Channel Access Token",
+        "required": true,
+        "description": "從 LINE Developers Console 取得"
+      },
+      {
+        "name": "LINE Channel Secret",
+        "required": true,
+        "description": "從 LINE Developers Console 取得"
+      },
+      {
+        "name": "Google Gemini API Key",
+        "required": true,
+        "description": "從 Google AI Studio 取得"
+      }
+    ]
+  },
+  "files": {
+    "assets": [
+      "docker-compose.yml",
+      ".env.example",
+      "webhook/",
+      "indexer/"
+    ],
+    "documentation": [
+      "README.md",
+      "SKILL.md"
+    ]
+  },
+  "installation": {
+    "steps": [
+      {
+        "step": 1,
+        "description": "複製 SKILL 到工作目錄",
+        "command": "cp -r assets/* /path/to/workspace/line-webhook/"
+      },
+      {
+        "step": 2,
+        "description": "設定環境變數",
+        "command": "cp .env.example .env && nano .env"
+      },
+      {
+        "step": 3,
+        "description": "準備知識庫",
+        "command": "mkdir -p knowledge && cp your-documents/* knowledge/"
+      },
+      {
+        "step": 4,
+        "description": "啟動服務",
+        "command": "docker compose up -d"
+      }
+    ]
+  },
+  "configuration": {
+    "env_variables": {
+      "required": [
+        "DOMAIN",
+        "LINE_CHANNEL_ACCESS_TOKEN",
+        "LINE_CHANNEL_SECRET",
+        "OWNER_USER_IDS",
+        "OPENAI_API_KEY"
+      ],
+      "optional": [
+        "OLLAMA_API_URL",
+        "OLLAMA_EMBEDDING_MODEL",
+        "LLM_MODEL",
+        "AUTO_REPLY_KEYWORDS"
+      ]
+    }
+  },
+  "features": [
+    {
+      "name": "RAG 知識庫",
+      "description": "使用 BGE-m3 + Qdrant 實現智能文件檢索"
+    },
+    {
+      "name": "語氣模仿",
+      "description": "學習 Owner 的回覆風格，讓機器人更像真人"
+    },
+    {
+      "name": "幻覺防護",
+      "description": "嚴格禁止 LLM 捏造或推測資訊"
+    },
+    {
+      "name": "業務人員角度",
+      "description": "以業務人員向客戶解釋的角度生成回覆"
+    },
+    {
+      "name": "自動 SSL",
+      "description": "使用 Let's Encrypt 自動簽章"
+    }
+  ],
+  "troubleshooting": {
+    "common_issues": [
+      {
+        "issue": "BGE-m3 連線失敗",
+        "solution": "確認 GPU Server 已啟動 Ollama，並下載 bge-m3 模型"
+      },
+      {
+        "issue": "LLM 回覆有幻覺",
+        "solution": "已內建幻覺防護，如仍有問題請檢查 RAG 檢索結果"
+      },
+      {
+        "issue": "LINE Webhook 驗證失敗",
+        "solution": "確認 DOMAIN 已正確指向伺服器 IP，且 SSL 憑證已簽發"
+      }
+    ]
+  },
+  "changelog": [
+    {
+      "version": "1.0.0",
+      "date": "2026-02-26",
+      "changes": [
+        "初始版本",
+        "支援 BGE-m3 + Gemini 2.5 Flash",
+        "RAG 知識庫檢索",
+        "語氣模仿功能",
+        "幻覺防護機制",
+        "自動 SSL"
+      ]
+    }
+  ]
+}
