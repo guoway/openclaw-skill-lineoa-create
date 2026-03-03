@@ -48,8 +48,25 @@ async function transaction(callback) {
     }
 }
 
+/**
+ * 初始化資料表
+ */
+async function initTables() {
+    // 建立 chat 模式表
+    await query(`
+        CREATE TABLE IF NOT EXISTS t_chat_modes (
+            chat_id VARCHAR(64) PRIMARY KEY,
+            mode ENUM('auto', 'manual') DEFAULT 'auto',
+            updated_by VARCHAR(64),
+            update_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `);
+    console.log('Database tables initialized');
+}
+
 module.exports = {
     mysql: { query },
     pool,
-    query
+    query,
+    initTables
 };

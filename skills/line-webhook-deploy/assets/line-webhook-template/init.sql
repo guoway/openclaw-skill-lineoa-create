@@ -1,7 +1,7 @@
 -- MySQL 初始化腳本
 -- LINE Bot 對話學習與 RAG 系統資料庫 Schema
 
-CREATE DATABASE IF NOT EXISTS linebot CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE DATABASE IF NOT EXISTS linebot CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
 USE linebot;
 
 -- ============================================
@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS t_users (
     update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_user_id (user_id),
     INDEX idx_is_owner (is_owner)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
 COMMENT='LINE 用戶基本資料';
 
 -- ============================================
@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS t_messages (
     INDEX idx_create_time (create_time),
     INDEX idx_is_owner (user_id, create_time),
     FULLTEXT INDEX ft_content (content)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
 COMMENT='對話記錄 - 用於側錄與語氣學習';
 
 -- ============================================
@@ -85,7 +85,7 @@ CREATE TABLE IF NOT EXISTS t_owner_style (
     
     UNIQUE KEY uk_user_id (user_id),
     INDEX idx_user_id (user_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
 COMMENT='Owner 語氣特徵分析結果';
 
 -- ============================================
@@ -116,7 +116,7 @@ CREATE TABLE IF NOT EXISTS t_documents (
     INDEX idx_status (status),
     INDEX idx_doc_id (doc_id),
     INDEX idx_create_time (create_time)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
 COMMENT='RAG 知識庫文件管理';
 
 -- ============================================
@@ -151,7 +151,7 @@ CREATE TABLE IF NOT EXISTS t_auto_replies (
     INDEX idx_user_id (user_id),
     INDEX idx_create_time (create_time),
     INDEX idx_trigger_reason (trigger_reason)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
 COMMENT='自動回覆記錄與效能追蹤';
 
 -- ============================================
@@ -163,7 +163,7 @@ CREATE TABLE IF NOT EXISTS t_settings (
     setting_value TEXT,
     description VARCHAR(500),
     update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
 COMMENT='系統設定';
 
 -- 預設設定
@@ -174,3 +174,55 @@ INSERT INTO t_settings (setting_key, setting_value, description) VALUES
 ('reply_temperature', '0.7', '回覆生成溫度'),
 ('system_prompt', '你是一位專業且友善的客服助理，請根據提供的資料回答問題。', '系統提示詞'),
 ('owner_persona_prompt', '', 'Owner 語氣模仿提示詞（由系統自動生成）');
+
+-- ============================================
+-- 用戶記憶摘要表 (t_user_memory)
+-- 第 2 層記憶：每個用戶的長期記憶摘要
+-- ============================================
+CREATE TABLE IF NOT EXISTS t_user_memory (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    user_id VARCHAR(255) NOT NULL UNIQUE COMMENT 'LINE User ID',
+    display_name VARCHAR(255) COMMENT '顯示名稱',
+    summary TEXT COMMENT '用戶記憶摘要（LLM 生成）',
+    topics JSON COMMENT '用戶關心的主題',
+    preferences JSON COMMENT '用戶偏好（預算、技術、溝通風格等）',
+    visit_count INT UNSIGNED DEFAULT 1 COMMENT '互動次數',
+    status VARCHAR(50) DEFAULT '新訪客' COMMENT '用戶狀態（新訪客/潛在客戶/已成交/回頭客）',
+    last_conversation_summary TEXT COMMENT '上次對話摘要',
+    last_interaction DATETIME COMMENT '上次互動時間',
+    create_time DATETIME DEFAULT CURRENT_TIMESTAMP,
+    update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_user_id (user_id),
+    INDEX idx_status (status),
+    INDEX idx_last_interaction (last_interaction)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
+COMMENT='用戶記憶摘要 - 第 2 層記憶系統';
+
+-- ============================================
+-- Bot 學習建議表 (t_learned_knowledge)
+-- 第 3 層記憶：Bot 從對話中學到的經驗（待 Owner 審核）
+-- ============================================
+CREATE TABLE IF NOT EXISTS t_learned_knowledge (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    source_type ENUM('conversation', 'owner_correction', 'owner_teach') NOT NULL COMMENT '來源類型',
+    source_chat_id VARCHAR(255) COMMENT '來源對話 ID',
+    source_message_ids JSON COMMENT '相關訊息 ID',
+
+    title VARCHAR(255) COMMENT '學習建議標題',
+    content TEXT NOT NULL COMMENT '學習建議內容',
+    category VARCHAR(100) COMMENT '分類（FAQ/報價/技術/流程等）',
+
+    status ENUM('pending', 'approved', 'rejected') DEFAULT 'pending' COMMENT '審核狀態',
+    reviewed_by VARCHAR(255) COMMENT '審核者 User ID',
+    reviewed_at DATETIME COMMENT '審核時間',
+    reject_reason TEXT COMMENT '拒絕原因',
+
+    create_time DATETIME DEFAULT CURRENT_TIMESTAMP,
+    update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+    INDEX idx_status (status),
+    INDEX idx_category (category),
+    INDEX idx_source_type (source_type),
+    INDEX idx_create_time (create_time)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
+COMMENT='Bot 學習建議 - 第 3 層記憶系統（待 Owner 審核）';

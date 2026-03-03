@@ -11,8 +11,8 @@ const axios = require('axios');
 const { mysql } = require('./db');
 
 const API_KEY = process.env.OPENAI_API_KEY;
-const BASE_URL = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
-const MODEL = process.env.LLM_MODEL || 'gpt-4o-mini';
+const BASE_URL = (process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/+$/, '');
+const MODEL = process.env.LLM_MODEL || 'kimi-k2.5';
 
 /**
  * 呼叫 LLM API
@@ -24,7 +24,7 @@ async function chatCompletion(messages, options = {}) {
         model: options.model || MODEL,
         messages: messages,
         temperature: options.temperature ?? 0.7,
-        max_tokens: options.maxTokens || 1000,
+        max_tokens: options.maxTokens || 4000,  // 增加到 4000 以獲得完整回覆
         ...options.extraParams
     }, {
         headers: {
@@ -38,16 +38,28 @@ async function chatCompletion(messages, options = {}) {
 }
 
 /**
- * 生成回覆
+ * 生成回覆（整合三層記憶系統）
+ * 
  * @param {string} userQuestion - 用戶問題
  * @param {array} ragResults - RAG 檢索結果
  * @param {object} ownerStyle - Owner 語氣特徵
+ * @param {object} [memoryContext] - 記憶上下文
+ * @param {Array} [memoryContext.conversationHistory] - 第 1 層：短期對話上下文
+ * @param {string} [memoryContext.userMemoryText] - 第 2 層：用戶記憶摘要文字
+ * @param {Array} [memoryContext.learnedKnowledge] - 第 3 層：已審核通過的學習知識
  */
-async function generateReply(userQuestion, ragResults, ownerStyle) {
+async function generateReply(userQuestion, ragResults, ownerStyle, memoryContext = {}) {
+    const { conversationHistory = [], userMemoryText = '', learnedKnowledge = [] } = memoryContext;
+    
     // 構建 RAG 上下文
     const context = ragResults.length > 0
         ? ragResults.map((r, i) => `[${i + 1}] ${r.content}`).join('\n\n')
         : '（無相關資料）';
+    
+    // 構建已學習知識上下文
+    const learnedContext = learnedKnowledge.length > 0
+        ? '\n\n【Bot 學習到的知識】\n' + learnedKnowledge.map(k => `- ${k.title || ''}：${k.content}`).join('\n')
+        : '';
     
     // 構建 Owner 語氣提示
     let stylePrompt = '';
@@ -61,27 +73,50 @@ async function generateReply(userQuestion, ragResults, ownerStyle) {
 `;
     }
     
-    const messages = [
-        {
-            role: 'system',
-            content: `你是一位專業且友善的客服助理。請根據以下參考資料回答問題。
-如果資料不足以回答，請誠實告知，並建議用戶聯繫人工客服。
+    // 構建 system prompt
+    const systemPrompt = `你是席爾克軟體的專業業務人員。請根據參考資料回答客戶的問題。
 
+**重要指示**：
+1. 你是在跟**客戶**對話，不是在跟內部同事對話
+2. 參考資料是內部文件，包含很多內部備註和說明（例如「依工程師能力增減」、「視專案大小決定」等）
+3. 你需要將內部資訊**轉化為對客戶友善的說明**，而不是直接引用內部備註
+4. 不要告訴客戶「依工程師能力增減」這類內部資訊，改用「我們會依據您的需求調整」
+5. 不要說「視專案大小決定」，改用「我們會根據專案的複雜度為您規劃最適合的方案」
+6. 用專業、親切的語氣向客戶說明，就像業務人員在跟客戶解釋一樣
+7. 價格和方案要清楚列出，但說明方式要對客戶友善
+
+**⚠️ 嚴格禁止幻覺（Hallucination）**：
+- **禁止**捏造或推測任何參考資料中沒有明確提到的資訊
+- **禁止**假設公司有別名或別稱
+- **禁止**推測公司之間的關係
+- **禁止**創造任何參考資料中沒有的公司名稱、人名、電話、地址等資訊
+- 如果資訊不明確，**寧可說「我需要確認」也不要猜測**
+- 你的公司名稱就是「席爾克軟體」，**不要**加上任何別稱或括號補充
+${userMemoryText}
 ${stylePrompt}
+回答要完整詳細，但角度要正確 - 你是代表公司向客戶說明的業務人員。`;
 
-回答要簡潔有力，避免過度冗長。必要時可使用條列式說明。`
-        },
-        {
-            role: 'user',
-            content: `【參考資料】
-${context}
+    // 構建 messages 陣列
+    const messages = [
+        { role: 'system', content: systemPrompt }
+    ];
+    
+    // 加入對話歷史（第 1 層：短期上下文）
+    if (conversationHistory.length > 0) {
+        messages.push(...conversationHistory);
+    }
+    
+    // 最後加入當前問題 + RAG 上下文
+    messages.push({
+        role: 'user',
+        content: `【參考資料】（這是內部文件，請轉化為對客戶友善的說明）
+${context}${learnedContext}
 
-【用戶問題】
+【客戶問題】
 ${userQuestion}
 
-請根據參考資料回答。如果參考資料不足，請說「這個問題我無法確定，建議您直接聯繫我們。」`
-        }
-    ];
+請以業務人員的角度，友善且專業地向客戶說明。**不要直接引用內部備註**，要轉化為客戶容易理解的說明。**⚠️ 嚴格禁止幻覺**：不要捏造或推測任何參考資料中沒有明確提到的資訊。如果參考資料不足，請說「這個問題我需要進一步了解您的需求，建議您直接聯繫我們的業務專員。」`
+    });
     
     return await chatCompletion(messages, { temperature: 0.7 });
 }

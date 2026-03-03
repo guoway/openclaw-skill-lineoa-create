@@ -88,10 +88,24 @@ All messages stored in `t_messages` table with `is_owner` flag for style learnin
 **通用指令：**
 - `/help` - 顯示使用說明（所有人可用）
 
-### 3. RAG Retrieval
+### 3. Three-Layer Memory System（三層記憶系統）
+
+**第 1 層：短期對話上下文**
+- 自動帶入最近 10 輪對話 + 30 分鐘時間窗口
+- 讓 Bot 在同一輪對話中記得前面說過的話
+
+**第 2 層：用戶記憶摘要**
+- 每個用戶一份長期記憶，對話結束後自動用 LLM 產生摘要
+- 記錄用戶關心的主題、偏好、互動次數、狀態
+
+**第 3 層：長期知識庫 + Bot 學習建議**
+- 通用知識放在 `knowledge/shared/`，客戶專屬知識放在 `knowledge/{customer}/`
+- Bot 偵測到 Owner 手動修正時，自動產生學習建議（待 Owner 審核）
+
+### 4. RAG Retrieval
 Documents in `knowledge/` are auto-indexed to Qdrant. LLM answers based on retrieved context.
 
-### 4. Style Imitation
+### 5. Style Imitation
 Analyze owner's historical messages to mimic speaking style. Trigger via `POST /admin/analyze-style`.
 
 ## File Structure
@@ -100,11 +114,15 @@ Analyze owner's historical messages to mimic speaking style. Trigger via `POST /
 line-webhook/
 ├── docker-compose.yml      # Service orchestration
 ├── .env.example            # Environment template
-├── init.sql                # Database schema
-├── ngrok.yml               # Tunnel config
+├── init.sql                # Database schema (含 t_user_memory, t_learned_knowledge)
+├── docs/                   # 專案文件
+│   ├── architecture/       # 系統架構文件
+│   ├── development/        # 開發文件
+│   └── operations/         # 維運文件
 ├── webhook/                # Main service
 │   ├── src/
 │   │   ├── index.js        # Webhook handler & business logic
+│   │   ├── memory.js       # 三層記憶系統模組
 │   │   ├── db.js           # MySQL connection
 │   │   ├── rag.js          # Vector search
 │   │   └── llm.js          # LLM integration
@@ -115,6 +133,12 @@ line-webhook/
 │   ├── Dockerfile
 │   └── package.json
 └── knowledge/              # Document storage
+    ├── shared/             # 通用知識（所有客戶共用）
+    │   ├── company/
+    │   ├── pricing/
+    │   ├── faq/
+    │   └── learned/        # Bot 學習審核通過的知識
+    └── {customer}/         # 客戶專屬知識
 ```
 
 ## Configuration
@@ -149,7 +173,13 @@ EMBEDDING_MODEL=embedding-001
 | `/help` | 所有人 | 顯示使用說明 |
 | `/auto` | Owner | 開啟自動回覆（1-on-1） |
 | `/manual` | Owner | 關閉自動回覆（1-on-1） |
-| `/status` | Owner | 查詢目前模式 |
+| `/status` | Owner | 查詢目前模式 + 待審核數 |
+| `/review` | Owner | 審核 Bot 學習建議 |
+| `/approve {id}` | Owner | 通過學習建議 |
+| `/reject {id} {原因}` | Owner | 拒絕學習建議 |
+| `/teach {內容}` | Owner | 主動教 Bot 新知識 |
+| `/memory` | Owner | 查看用戶記憶摘要 |
+| `/forget {userId}` | Owner | 清除特定用戶記憶 |
 
 ## Deployment Steps
 

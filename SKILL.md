@@ -281,7 +281,22 @@ docker compose restart indexer
 **通用指令**：
 - `/help` - 顯示使用說明（所有人可用）
 
-### 2. 語氣模仿
+### 2. 三層記憶系統
+
+| 層級 | 說明 | 來源 |
+|------|------|------|
+| 第 1 層 | 短期對話上下文（10 輪 / 30 分鐘） | MySQL t_messages |
+| 第 2 層 | 用戶記憶摘要（對話結束後自動更新） | MySQL t_user_memory |
+| 第 3 層 | 長期知識庫 + Bot 學習建議（Owner 審核） | Qdrant + MySQL t_learned_knowledge |
+
+**Owner 記憶管理指令**：
+- `/review` - 審核 Bot 的學習建議
+- `/approve {id}` / `/reject {id} {原因}` - 通過/拒絕
+- `/teach {內容}` - 主動教 Bot 新知識
+- `/memory` - 查看用戶記憶摘要
+- `/forget {userId}` - 清除特定用戶記憶
+
+### 3. 語氣模仿
 
 系統會分析 Owner 的回覆風格，並模仿其語氣：
 - 平均句長

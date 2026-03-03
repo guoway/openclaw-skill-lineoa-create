@@ -16,6 +16,17 @@ const winston = require('winston');
 const { mysql, pool, query, initTables } = require('./db');
 const { searchSimilar, addDocument } = require('./rag');
 const { generateReply, analyzeOwnerStyle } = require('./llm');
+const {
+    getRecentConversation,
+    getUserMemory,
+    formatUserMemoryForPrompt,
+    scheduleMemoryUpdate,
+    suggestLearning,
+    getPendingLearning,
+    reviewLearning,
+    getApprovedKnowledge,
+    MEMORY_CONFIG
+} = require('./memory');
 
 // ============================================
 // Logger 設定
@@ -359,35 +370,59 @@ async function shouldAutoReply(event, userMessage) {
 }
 
 /**
- * 處理自動回覆
+ * 處理自動回覆（整合三層記憶系統）
  */
 async function handleAutoReply(event, userMessage, replyToken, replyDecision) {
     const startTime = Date.now();
+    const chatId = event.source.groupId || event.source.roomId || event.source.userId;
+    const userId = event.source.userId;
     
     try {
         logger.info(`Auto-reply triggered for: ${userMessage.substring(0, 50)}...`);
         
-        // 1. RAG 檢索
+        // 1. 第 1 層：取得短期對話上下文
+        const conversationHistory = await getRecentConversation(chatId, userId);
+        logger.info(`Context: ${conversationHistory.length} messages loaded`);
+        
+        // 2. 第 2 層：取得用戶記憶摘要
+        const userMemory = await getUserMemory(userId);
+        const userMemoryText = formatUserMemoryForPrompt(userMemory);
+        if (userMemory) {
+            logger.info(`User memory loaded for ${userId}: ${userMemory.status}`);
+        }
+        
+        // 3. 第 3 層：RAG 檢索
         const retrievalStart = Date.now();
         const ragResults = await searchSimilar(userMessage, 5);
         const retrievalTime = Date.now() - retrievalStart;
-        
         logger.info(`RAG retrieved ${ragResults.length} results in ${retrievalTime}ms`);
         
-        // 2. 取得 Owner 語氣
+        // 4. 取得已審核通過的學習知識，補充 RAG
+        const learnedKnowledge = await getApprovedKnowledge();
+        
+        // 5. 取得 Owner 語氣
         const ownerStyle = await getOwnerStyle();
         
-        // 3. 生成回覆
+        // 6. 生成回覆（帶入三層記憶）
         const generationStart = Date.now();
-        const reply = await generateReply(userMessage, ragResults, ownerStyle);
+        const reply = await generateReply(
+            userMessage,
+            ragResults,
+            ownerStyle,
+            {
+                conversationHistory,
+                userMemoryText,
+                learnedKnowledge
+            }
+        );
         const generationTime = Date.now() - generationStart;
         
-        // 4. 發送回覆
+        // 7. 發送回覆
         await replyMessage(replyToken, reply);
         
-        // 5. 記錄到資料庫
+        // 8. 記錄到資料庫
         await saveAutoReply({
-            userId: event.source.userId,
+            userId: userId,
             triggerKeyword: event.triggerInfo?.keyword || null,
             triggerReason: replyDecision?.reason || 'auto_mode',
             userQuestion: userMessage,
@@ -398,11 +433,14 @@ async function handleAutoReply(event, userMessage, replyToken, replyDecision) {
             generationTimeMs: generationTime
         });
         
+        // 9. 排程記憶更新（30 分鐘無互動後觸發）
+        const profile = await getUserProfile(userId);
+        scheduleMemoryUpdate(chatId, userId, profile?.displayName);
+        
         logger.info(`Auto-reply completed in ${Date.now() - startTime}ms`);
         
     } catch (error) {
         logger.error('Auto-reply failed:', error);
-        // 發送fallback回覆
         await replyMessage(replyToken, '抱歉，我暫時無法處理您的問題，請稍後再試或直接聯繫我們。');
     }
 }
@@ -483,11 +521,115 @@ async function handleMessageEvent(event) {
             
             if (trimmedMsg === '/status') {
                 const currentMode = await getChatMode(chatId);
-                await replyMessage(event.replyToken, `📊 目前模式：${currentMode === 'auto' ? '自動回覆 🤖' : '手動模式 👤'}\n\n可用指令：\n/auto - 自動回覆\n/manual - 手動模式\n/status - 查詢狀態\n/help - 使用說明`);
+                const pendingCount = await getPendingLearning(1);
+                const pendingText = pendingCount.length > 0 ? `\n📚 有待審核的學習建議，請用 /review 查看` : '';
+                await replyMessage(event.replyToken, `📊 目前模式：${currentMode === 'auto' ? '自動回覆 🤖' : '手動模式 👤'}${pendingText}\n\n可用指令：\n/auto - 自動回覆\n/manual - 手動模式\n/status - 查詢狀態\n/review - 審核學習建議\n/teach {內容} - 教 Bot 新知識\n/memory - 查看用戶記憶\n/forget {userId} - 清除用戶記憶\n/help - 使用說明`);
                 return;
             }
             
-            // Owner 的其他訊息，只記錄不回覆
+            // /review - 審核 Bot 的學習建議
+            if (trimmedMsg === '/review') {
+                const pending = await getPendingLearning(3);
+                if (pending.length === 0) {
+                    await replyMessage(event.replyToken, '✅ 目前沒有待審核的學習建議。');
+                    return;
+                }
+                
+                let reviewText = `📚 待審核的學習建議（${pending.length} 筆）\n\n`;
+                pending.forEach((item, i) => {
+                    reviewText += `【#${item.id}】${item.title || '無標題'}\n`;
+                    reviewText += `分類：${item.category || '未分類'}\n`;
+                    reviewText += `內容：${item.content.substring(0, 100)}${item.content.length > 100 ? '...' : ''}\n`;
+                    reviewText += `來源：${item.source_type}\n\n`;
+                });
+                reviewText += `回覆指令：\n✅ /approve {id} - 通過\n❌ /reject {id} {原因} - 拒絕`;
+                
+                await replyMessage(event.replyToken, reviewText);
+                return;
+            }
+            
+            // /approve {id} - 通過學習建議
+            if (trimmedMsg.startsWith('/approve ')) {
+                const id = parseInt(trimmedMsg.replace('/approve ', '').trim());
+                if (isNaN(id)) {
+                    await replyMessage(event.replyToken, '❌ 格式錯誤，請用 /approve {id}');
+                    return;
+                }
+                const success = await reviewLearning(id, 'approved', senderId);
+                await replyMessage(event.replyToken, success ? `✅ 學習建議 #${id} 已通過！` : `❌ 找不到 #${id} 或已審核過。`);
+                return;
+            }
+            
+            // /reject {id} {原因} - 拒絕學習建議
+            if (trimmedMsg.startsWith('/reject ')) {
+                const parts = userMessage.trim().substring(8).trim().split(/\s+/);
+                const id = parseInt(parts[0]);
+                const reason = parts.slice(1).join(' ') || null;
+                if (isNaN(id)) {
+                    await replyMessage(event.replyToken, '❌ 格式錯誤，請用 /reject {id} {原因}');
+                    return;
+                }
+                const success = await reviewLearning(id, 'rejected', senderId, reason);
+                await replyMessage(event.replyToken, success ? `❌ 學習建議 #${id} 已拒絕。` : `❌ 找不到 #${id} 或已審核過。`);
+                return;
+            }
+            
+            // /teach {內容} - 主動教 Bot 新知識
+            if (userMessage.trim().startsWith('/teach ')) {
+                const content = userMessage.trim().substring(7).trim();
+                if (!content) {
+                    await replyMessage(event.replyToken, '❌ 請提供要教的內容\n格式：/teach {內容}');
+                    return;
+                }
+                await suggestLearning({
+                    sourceType: 'owner_teach',
+                    sourceChatId: chatId,
+                    title: content.substring(0, 50),
+                    content: content,
+                    category: '其他'
+                });
+                // 直接自動通過（因為是 Owner 親自教的）
+                const pending = await getPendingLearning(1);
+                if (pending.length > 0) {
+                    await reviewLearning(pending[0].id, 'approved', senderId);
+                }
+                await replyMessage(event.replyToken, `✅ 已學習！\n內容：${content.substring(0, 100)}${content.length > 100 ? '...' : ''}`);
+                return;
+            }
+            
+            // /memory - 查看用戶記憶摘要
+            if (trimmedMsg === '/memory') {
+                const allMemories = await mysql.query(
+                    'SELECT user_id, display_name, summary, status, visit_count, last_interaction FROM t_user_memory ORDER BY last_interaction DESC LIMIT 10'
+                );
+                if (allMemories.length === 0) {
+                    await replyMessage(event.replyToken, '📝 目前沒有任何用戶記憶。');
+                    return;
+                }
+                let memText = `📝 用戶記憶摘要（最近 ${allMemories.length} 位）\n\n`;
+                allMemories.forEach(m => {
+                    memText += `👤 ${m.display_name || m.user_id}\n`;
+                    memText += `   狀態：${m.status} | 互動：${m.visit_count} 次\n`;
+                    memText += `   摘要：${(m.summary || '無').substring(0, 60)}\n\n`;
+                });
+                await replyMessage(event.replyToken, memText);
+                return;
+            }
+            
+            // /forget {userId} - 清除特定用戶的記憶
+            if (userMessage.trim().startsWith('/forget ')) {
+                const targetUserId = userMessage.trim().substring(8).trim();
+                if (!targetUserId) {
+                    await replyMessage(event.replyToken, '❌ 請提供 User ID\n格式：/forget {userId}');
+                    return;
+                }
+                await mysql.query('DELETE FROM t_user_memory WHERE user_id = ?', [targetUserId]);
+                await replyMessage(event.replyToken, `✅ 已清除 ${targetUserId} 的記憶。`);
+                return;
+            }
+            
+            // Owner 的其他訊息，只記錄不回覆，但排程記憶更新
+            scheduleMemoryUpdate(chatId, senderId);
             logger.info('Owner message recorded for style learning');
             return;
         }
@@ -504,6 +646,9 @@ async function handleMessageEvent(event) {
         await saveMessage(event, true);
     } else {
         logger.info(`No auto-reply: ${replyDecision.reason}`);
+        // 即使不回覆，也排程記憶更新（記錄用戶互動）
+        const profile = await getUserProfile(senderId);
+        scheduleMemoryUpdate(chatId, senderId, profile?.displayName);
     }
 }
 
@@ -627,10 +772,11 @@ async function start() {
         app.listen(CONFIG.PORT, () => {
             logger.info(`LINE Webhook server running on port ${CONFIG.PORT}`);
             logger.info(`Owner User IDs: ${CONFIG.OWNER_USER_IDS.join(', ') || 'NOT SET'}`);
-            logger.info(`Auto-reply keywords: ${CONFIG.AUTO_REPLY_KEYWORDS.join(', ')}`);
-            logger.info(`Mode (1-on-1): /auto (自動回覆) | /manual (手動模式) | /status (查詢狀態)`);
+            logger.info(`Mode (1-on-1): /auto | /manual | /status`);
             logger.info(`Mode (群組): 只在被 @提及 時回覆`);
-            logger.info(`Commands: /help (所有人可用)`);
+            logger.info(`Memory: context=${MEMORY_CONFIG.CONTEXT_LIMIT} msgs, window=${MEMORY_CONFIG.CONTEXT_WINDOW_MIN} min`);
+            logger.info(`Memory: auto_update=${MEMORY_CONFIG.AUTO_UPDATE}, learning=${MEMORY_CONFIG.LEARNING_ENABLED}`);
+            logger.info(`Commands: /help /review /teach /memory /forget`);
         });
     } catch (error) {
         logger.error('Failed to start server:', error);
