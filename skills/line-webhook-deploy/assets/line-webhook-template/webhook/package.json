@@ -1,0 +1,26 @@
+{
+  "name": "line-webhook-rag",
+  "version": "1.0.0",
+  "description": "LINE Webhook with RAG and conversation learning",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js"
+  },
+  "dependencies": {
+    "@line/bot-sdk": "^9.0.0",
+    "axios": "^1.6.0",
+    "crypto": "^1.0.1",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "mammoth": "^1.6.0",
+    "multer": "^1.4.5-lts.1",
+    "mysql2": "^3.6.5",
+    "openai": "^4.20.1",
+    "pdf-parse": "^1.1.1",
+    "winston": "^3.11.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  }
+}

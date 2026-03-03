@@ -1,0 +1,9 @@
+version: "2"
+authtoken: ${NGROK_AUTHTOKEN}
+
+tunnels:
+  webhook:
+    proto: http
+    addr: webhook:3000
+    # subdomain: your-custom-domain  # Paid ngrok feature
+    # hostname: your-domain.ngrok-free.app

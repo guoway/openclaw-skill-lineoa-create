@@ -12,6 +12,50 @@
 
 ---
 
+## 目錄結構
+
+```
+lineoa-create/
+├── SKILL.md                          # 主 SKILL 說明文件
+├── README.md                         # 專案說明
+├── lineoa-create.skill               # SKILL 定義檔
+├── assets/                           # 主要資產
+│   └── .env.example                  # 環境變數範本
+├── scripts/                          # 部署腳本
+│   └── deploy.sh                     # 主要部署腳本
+├── references/                       # 參考文件
+│   └── ...
+└── skills/                           # 子 SKILL 目錄
+    └── line-webhook-deploy/          # Webhook 部署子 SKILL
+        ├── SKILL.md                  # 子 SKILL 說明
+        ├── assets/
+        │   └── line-webhook-template/  # Webhook 範本
+        ├── references/
+        │   ├── providers.md          # LLM 提供者設定
+        │   ├── schema.md             # 資料庫 Schema
+        │   └── troubleshooting.md    # 故障排除
+        └── scripts/
+            └── deploy.sh             # 子 SKILL 部署腳本
+```
+
+---
+
+## 子 SKILL 說明
+
+### line-webhook-deploy
+負責部署 LINE Webhook 服務，包含：
+- Express webhook server
+- MySQL 資料庫（對話記錄）
+- Qdrant 向量資料庫（RAG）
+- 自動檔案索引服務
+- nginx-proxy + Let's Encrypt SSL
+
+**使用情境**：當需要為客戶部署 LINE Bot 後端服務時
+
+**詳細說明**：請參考 [skills/line-webhook-deploy/SKILL.md](skills/line-webhook-deploy/SKILL.md)
+
+---
+
 ## 系統架構
 
 ```
@@ -84,15 +128,25 @@
 # 進入 OpenClaw skills 目錄
 cd ~/.openclaw/workspace-test/skills
 
-# Clone SKILL
+# Clone SKILL（如果還沒有）
 #（或在 OpenClaw 中使用 SKILL 指令）
 ```
 
-### 步驟 2：設定環境變數
+### 步驟 2：從範本建立客戶專案
+
+```bash
+# 複製 webhook 範本到客戶目錄
+cp -r skills/lineoa-create/skills/line-webhook-deploy/assets/line-webhook-template ./customer-name
+
+# 進入客戶專案目錄
+cd customer-name
+```
+
+### 步驟 3：設定環境變數
 
 ```bash
 # 複製範本
-cp assets/.env.example .env
+cp .env.example .env
 
 # 編輯設定
 nano .env
@@ -121,7 +175,7 @@ OLLAMA_API_URL=http://your-gpu-server:11434
 OLLAMA_EMBEDDING_MODEL=bge-m3
 ```
 
-### 步驟 3：部署 GPU Server（BGE-m3）
+### 步驟 4：部署 GPU Server（BGE-m3）
 
 **在 GPU Server 上執行**：
 
@@ -150,7 +204,7 @@ docker run -d \
 docker exec ollama ollama pull bge-m3
 ```
 
-### 步驟 4：啟動服務
+### 步驟 5：啟動服務
 
 ```bash
 # 建立 knowledge 目錄
@@ -163,7 +217,7 @@ docker compose up -d
 docker compose logs -f webhook
 ```
 
-### 步驟 5：驗證部署
+### 步驟 6：驗證部署
 
 ```bash
 # 檢查服務狀態
@@ -209,12 +263,19 @@ docker compose restart indexer
 
 ## 功能說明
 
-### 1. 自動回覆
+### 1. 智能自動回覆（情境感知）
 
-當客戶訊息包含以下關鍵字時，會觸發自動回覆：
-- 問、查詢、help
-- 怎麼、如何
-- 多少錢
+**群組/聊天室**：
+- 只在被 `@提及` 時回覆（避免打擾群組對話）
+- 支援格式：`@席爾克軟體`、`@席爾克`、`@bot`、`@客服`
+
+**1-on-1 對話**：
+- `/auto` - 開啟自動回覆（預設）
+- `/manual` - 關閉自動回覆，改由人工處理
+- `/status` - 查詢目前模式
+
+**通用指令**：
+- `/help` - 顯示使用說明（所有人可用）
 
 ### 2. 語氣模仿
 
@@ -315,7 +376,7 @@ docker logs ollama
 
 ### 自訂 Reranking 規則
 
-編輯 `assets/webhook/src/rag.js`：
+編輯 `skills/line-webhook-deploy/assets/line-webhook-template/webhook/src/rag.js`：
 
 ```javascript
 // 關鍵詞加權規則
@@ -326,7 +387,7 @@ if (queryText.includes('報價原則') && source.includes('報價原則')) {
 
 ### 自訂 System Prompt
 
-編輯 `assets/webhook/src/llm.js`：
+編輯 `skills/line-webhook-deploy/assets/line-webhook-template/webhook/src/llm.js`：
 
 ```javascript
 {
@@ -337,7 +398,7 @@ if (queryText.includes('報價原則') && source.includes('報價原則')) {
 
 ### 調整檢索參數
 
-編輯 `assets/webhook/src/rag.js`：
+編輯 `skills/line-webhook-deploy/assets/line-webhook-template/webhook/src/rag.js`：
 
 ```javascript
 const candidateLimit = 100;  // 候選數量
@@ -374,6 +435,14 @@ MIT License
 ---
 
 ## 更新日誌
+
+### v1.1.0 (2026-03-03)
+- 重組目錄結構，加入子 SKILL 支援
+- 新增 `skills/line-webhook-deploy` 子 SKILL
+- 更新自動回覆行為：
+  - 群組：只在 @提及 時回覆
+  - 1-on-1：支援 auto/manual 模式切換
+- 新增 `/help` 指令（所有人可用）
 
 ### v1.0.0 (2026-02-25)
 - 初始版本

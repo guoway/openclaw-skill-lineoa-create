@@ -1,0 +1,112 @@
+version: '3.8'
+
+services:
+  webhook:
+    build: ./webhook
+    container_name: line-webhook
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_NAME=linebot
+      - DB_USER=linebot
+      - DB_PASSWORD=${DB_PASSWORD:-linebot123}
+      - LINE_CHANNEL_ACCESS_TOKEN=${LINE_CHANNEL_ACCESS_TOKEN}
+      - LINE_CHANNEL_SECRET=${LINE_CHANNEL_SECRET}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL}
+      - OWNER_USER_ID=${OWNER_USER_ID}
+      - AUTO_REPLY_KEYWORDS=${AUTO_REPLY_KEYWORDS}
+      - KNOWLEDGE_BASE_DIR=/app/knowledge
+    volumes:
+      - ./knowledge:/app/knowledge:ro
+      - ./logs:/app/logs
+    depends_on:
+      mysql:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    networks:
+      - linebot-network
+    restart: unless-stopped
+
+  ngrok:
+    image: ngrok/ngrok:latest
+    container_name: line-ngrok
+    command:
+      - "start"
+      - "--all"
+      - "--config"
+      - "/etc/ngrok.yml"
+    environment:
+      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
+    volumes:
+      - ./ngrok.yml:/etc/ngrok.yml:ro
+    ports:
+      - "4040:4040"
+    depends_on:
+      - webhook
+    networks:
+      - linebot-network
+    restart: unless-stopped
+
+  mysql:
+    image: mysql:8.0
+    container_name: line-mysql
+    environment:
+      - MYSQL_ROOT_PASSWORD=${DB_ROOT_PASSWORD:-root123}
+      - MYSQL_DATABASE=linebot
+      - MYSQL_USER=linebot
+      - MYSQL_PASSWORD=${DB_PASSWORD:-linebot123}
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "3307:3306"
+    networks:
+      - linebot-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: line-qdrant
+    volumes:
+      - qdrant-data:/qdrant/storage
+    ports:
+      - "6333:6333"
+    networks:
+      - linebot-network
+    restart: unless-stopped
+
+  indexer:
+    build: ./indexer
+    container_name: line-indexer
+    environment:
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL}
+      - KNOWLEDGE_BASE_DIR=/app/knowledge
+    volumes:
+      - ./knowledge:/app/knowledge
+    depends_on:
+      - qdrant
+    networks:
+      - linebot-network
+    restart: unless-stopped
+
+volumes:
+  mysql-data:
+  qdrant-data:
+
+networks:
+  linebot-network:
+    driver: bridge
