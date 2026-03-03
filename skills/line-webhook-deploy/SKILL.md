@@ -73,7 +73,11 @@ All messages stored in `t_messages` table with `is_owner` flag for style learnin
 
 **群組/聊天室：**
 - 只在被 `@提及` 時回覆（避免打擾群組對話）
-- 支援格式：`@席爾克軟體`、`@席爾克`、`@bot`、`@客服`
+- 支援格式：
+  - `@席爾克軟體`（完整名稱）
+  - `@席爾克`（簡稱）
+  - `@bot`（通用，方便客戶使用）
+  - `@客服`（功能稱呼）
 - 也支援 LINE 原生的 @提及 功能
 
 **1-on-1 對話：**
