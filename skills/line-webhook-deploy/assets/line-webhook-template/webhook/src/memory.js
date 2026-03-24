@@ -474,6 +474,7 @@ async function getPendingLearning(limit = 5) {
             ORDER BY create_time ASC
             LIMIT ?
         `;
+
         return await mysql.query(sql, [limit]);
     } catch (error) {
         logger.error('Failed to get pending learning:', error);

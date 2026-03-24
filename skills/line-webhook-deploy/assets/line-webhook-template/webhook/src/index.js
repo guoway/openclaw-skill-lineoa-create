@@ -471,7 +471,7 @@ async function handleMessageEvent(event) {
         if (trimmedMsg === '/help') {
             const isGroup = event.source.type === 'group' || event.source.type === 'room';
             const helpMessage = isGroup 
-                ? `🤖 席爾克軟體智能助理使用說明
+                ? `🤖 席爾克軟體智能助理
 
 📍 群組模式：
 在群組中，請 @提到我 我才會回覆喔！
@@ -482,21 +482,42 @@ async function handleMessageEvent(event) {
 • @bot（簡短方便！）
 • @客服
 
-📝 其他指令：
+📝 指令列表：
 /help - 顯示此說明
 
 💡 小提示：
-如果是私下 1-on-1 對話，我可以自動回覆您的問題！`
-                : `🤖 席爾克軟體智能助理使用說明
+如果是私下 1-on-1 對話，我可以自動回覆您的問題！
+
+🔧 Owner 專用指令：
+/status - 查詢系統狀態
+/review - 審核學習建議
+/teach {內容} - 教我新知識
+/memory - 查看用戶記憶`
+                : `🤖 席爾克軟體智能助理
 
 📍 1-on-1 對話模式：
 您可以直接發問，我會自動回覆！
+我會記住我們的對話內容，讓溝通更順暢。
 
-📝 可用指令：
+📝 一般指令：
+/help - 顯示此說明
+
+🔧 Owner 專用指令：
+
+【模式控制】
 /auto - 開啟自動回覆（預設）
 /manual - 關閉自動回覆（改由人工處理）
-/status - 查詢目前模式
-/help - 顯示此說明
+/status - 查詢目前模式與系統狀態
+
+【記憶管理】
+/memory - 查看所有用戶的記憶摘要
+/forget {userId} - 清除特定用戶的記憶
+
+【知識學習】
+/review - 查看待審核的學習建議
+/approve {id} - 通過學習建議
+/reject {id} {原因} - 拒絕學習建議
+/teach {內容} - 直接教我新知識（自動通過）
 
 💡 小提示：
 如果需要轉接人工服務，請發送 /manual`;
