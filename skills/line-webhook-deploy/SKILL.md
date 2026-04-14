@@ -5,7 +5,8 @@ description: Deploy a complete LINE Official Account Webhook system with RAG (Re
 
 # LINE Webhook Deploy
 
-Deploy a production-ready LINE OA Webhook system with RAG capabilities.
+Deploy a production-ready LINE OA Webhook system with RAG capabilities.  
+**技術棧：Python 3.12 + FastAPI（非 Node.js 版本）**
 
 ## Quick Start
 
@@ -18,48 +19,48 @@ cp my-line-bot/.env.example my-line-bot/.env
 # Edit .env with your credentials
 
 # 3. Deploy
-cd my-line-bot && docker-compose up -d
+cd my-line-bot && docker-compose up -d --build
 ```
 
 ## Architecture
 
 ```
-LINE Platform ──HTTPS──→ nginx-proxy (SSL) ──HTTP──→ webhook (Node.js)
+LINE Platform ──HTTPS──→ nginx-proxy (SSL) ──HTTP──→ webhook-python (FastAPI :3000)
                                    │                         │
                     ┌──────────────┼─────────────────────────┤
                     │              │                         │
                Let's Encrypt    MySQL                    Qdrant
                (acme-companion) (conversation)        (vector search)
                                                         │
-                                                    indexer
-                                                (file watcher)
+                                               indexer-python
+                                               (file watcher)
 ```
 
 ## Components
 
 | Service | Purpose | Port |
 |---------|---------|------|
-| webhook | Express server handling LINE events | 3000 (internal) |
-| nginx-proxy | Reverse proxy with auto SSL | 80, 443 |
+| webhook-python | FastAPI server handling LINE events + auto-reply decision | 3000 (internal) |
+| nginx-proxy | Reverse proxy with auto SSL（外部對外時啟用） | 80, 443 |
 | acme-companion | Let's Encrypt certificate automation | - |
-| mysql | Conversation & user data | 13306 (host) |
+| mysql | Conversation & user data + settings | 13306 (host) |
 | qdrant | Vector database for RAG | 6333 (internal) |
-| indexer | Auto-index files from knowledge/ | - |
+| indexer-python | Auto-index files from knowledge/ to Qdrant | - |
 
 ## Required Credentials
 
 ### LINE Developers Console
 - Channel Access Token
 - Channel Secret
-- Owner User IDs (obtained after first interaction)
+- Owner User IDs（首次互動後從 MySQL t_users 取得）
 
 ### Domain & SSL
-- A domain name pointing to your server
-- Let's Encrypt will auto-generate SSL certificates
+- 一個域名指向你的 server
+- Let's Encrypt 會自動產生 SSL 憑證（搭配 nginx-proxy + acme-companion）
 
-### LLM Provider (OpenAI-compatible)
+### LLM Provider（OpenAI-compatible）
 - API Key
-- Base URL (provider-specific)
+- Base URL（ provider-specific）
 - Model name
 
 See [references/providers.md](references/providers.md) for LLM provider configurations.
@@ -69,7 +70,10 @@ See [references/providers.md](references/providers.md) for LLM provider configur
 ### 1. Conversation Logging
 All messages stored in `t_messages` table with `is_owner` flag for style learning.
 
-### 2. Smart Auto-Reply (情境感知)
+### 2. Smart Auto-Reply（情境感知）
+
+**自動回覆受 `t_settings.auto_reply_enabled` 控制**（預設 `true`）。  
+設為 `false` 時，Bot 完全不會主動回覆任何訊息，可用於維護或緊急關閉。
 
 **群組/聊天室：**
 - 只在被 `@提及` 時回覆（避免打擾群組對話）
@@ -83,10 +87,30 @@ All messages stored in `t_messages` table with `is_owner` flag for style learnin
 **1-on-1 對話：**
 - `/auto` - 開啟自動回覆（預設）
 - `/manual` - 關閉自動回覆，改由人工處理
-- `/status` - 查詢目前模式
+- `/status` - 查詢目前模式 + 待審核數
 
-**通用指令：**
-- `/help` - 顯示使用說明（所有人可用）
+**AI 干預時機邏輯（`owner_response_timeout`，預設 5 分鐘）：**
+
+當一般 user 傳訊息進來時，系統依序檢查：
+
+1. 是否為 Owner 本人？→ 否則繼續
+2. 群組但未 mention Bot？→ 不回
+3. chat mode 是 `manual`？→ 不回
+4. **Owner 在最近 N 分鐘內有回覆過？（`owner_response_timeout`）**→ 回就不打擾
+5. 訊息是否命中關鍵字（`AUTO_REPLY_KEYWORDS`）？
+6. 以上皆非 → 仍會回覆（啗主動模式）
+
+`owner_response_timeout` 的設計目的：Owner 剛回覆過代表正在處理，AI 不要搶先插話。超過設定時間 Owner 沉默，AI 才補位回覆。
+
+**觸發後流程：**
+```
+RAG 相似度檢索（Qdrant）
+  → 讀取 conversation history（t_messages）
+  → 讀取 user memory（t_user_memory）
+  → 讀取 owner style（t_owner_style）
+  → 讀取 learned knowledge（t_learned_knowledge, status=approved）
+  → LLM 生成回覆
+```
 
 ### 3. Three-Layer Memory System（三層記憶系統）
 
@@ -111,35 +135,63 @@ Analyze owner's historical messages to mimic speaking style. Trigger via `POST /
 ## File Structure
 
 ```
-line-webhook/
-├── docker-compose.yml      # Service orchestration
-├── .env.example            # Environment template
-├── init.sql                # Database schema (含 t_user_memory, t_learned_knowledge)
-├── docs/                   # 專案文件
-│   ├── architecture/       # 系統架構文件
-│   ├── development/        # 開發文件
-│   └── operations/         # 維運文件
-├── webhook/                # Main service
-│   ├── src/
-│   │   ├── index.js        # Webhook handler & business logic
-│   │   ├── memory.js       # 三層記憶系統模組
-│   │   ├── db.js           # MySQL connection
-│   │   ├── rag.js          # Vector search
-│   │   └── llm.js          # LLM integration
-│   ├── Dockerfile
-│   └── package.json
-├── indexer/                # File indexing service
-│   ├── indexer.js
-│   ├── Dockerfile
-│   └── package.json
-└── knowledge/              # Document storage
-    ├── shared/             # 通用知識（所有客戶共用）
-    │   ├── company/
-    │   ├── pricing/
-    │   ├── faq/
-    │   └── learned/        # Bot 學習審核通過的知識
-    └── {customer}/         # 客戶專屬知識
+line-webhook/                          # ← 這就是 docker-compose.yml 的 build context（context: ./webhook）
+├── docker-compose.yml                 # Service orchestration（本檔案位於此，目錄結尾）
+├── Dockerfile
+├── requirements.txt
+├── app/                               # Python FastAPI 應用程式
+│   ├── main.py                        # FastAPI 入口
+│   ├── api/
+│   │   ├── webhook.py                 # LINE webhook endpoint
+│   │   └── admin.py                   # 管理 API（/stats, /analyze-style）
+│   ├── core/
+│   │   └── config.py                  # 環境變數設定（pydantic_settings）
+│   ├── db/
+│   │   ├── models/                    # SQLAlchemy models
+│   │   └── session.py                  # DB session 管理
+│   ├── repositories/                   # 資料存取層
+│   ├── services/
+│   │   ├── webhook_service.py          # Webhook 主流程
+│   │   ├── auto_reply_service.py       # 自動回覆決策邏輯
+│   │   ├── rag_service.py             # Qdrant 檢索
+│   │   ├── llm_service.py             # LLM 生成
+│   │   ├── memory_service.py          # 三層記憶系統
+│   │   └── owner_config_service.py    # Owner 設定管理
+│   ├── schemas/                       # Pydantic schemas
+│   └── scripts/
+│       ├── run_indexer.py             # Indexer 入口
+│       └── run_memory_jobs.py         # Background memory jobs
+├── init.sql                           # 資料庫 schema（含 t_settings 初始資料）
+├── knowledge/                         # 文件知識庫
+│   ├── shared/
+│   └── {customer}/
+└── indexer/                           # （已整合至 app/scripts/）
 ```
+
+> **重要：** `docker-compose.yml` 本身位於 `webhook/` 目錄內，設定 `context: ./webhook`（即 context 為上層目錄）。  
+> 這個設計讓 `COPY . ./` 可以正確把 `app/` 等所有原始碼複製進容器。
+
+## t_settings 關鍵設定
+
+系統啟動時，`init.sql` 會寫入以下設定，之後可透過 SQL 或重啟服務後生效：
+
+| setting_key | 預設值 | 說明 |
+|------------|--------|------|
+| `owner_user_ids` | （空）| Owner 的 LINE user ID，逗號分隔 |
+| `auto_reply_enabled` | `true` | 全域自動回覆總開關。`false` 時 Bot 完全不回覆 |
+| `owner_response_timeout` | `5` | Owner 多久未回覆才讓 AI 介入（分鐘）|
+| `system_prompt` | （預設 prompt）| LLM 系統提示詞 |
+
+**`auto_reply_enabled` 實作邏輯：**
+- 放在 `webhook_service.py` 的 `_is_auto_reply_enabled()` 方法
+- 在所有 auto-reply 決策之前，獨立 gate 在 `t_settings` 讀取
+- `false` 時直接回傳 `reason="auto_reply_disabled"`，不進入 RAG/LLM 流程
+- `true/1/yes`（大小寫無關）→ 視為啟用；其餘值 → 預設停用（保險策略）
+
+**`owner_response_timeout` 實作邏輯：**
+- 放在 `auto_reply_decision_service.py`
+- 每次收到 user 訊息時，查 `t_messages` 確認同 chat 裡 Owner 最近 N 分鐘內是否有回覆
+- `has_owner_replied_since(chat_id, timeout_minutes)` → 回 `True` 時，AI 不介入
 
 ## Configuration
 
@@ -151,19 +203,22 @@ LINE_CHANNEL_ACCESS_TOKEN=xxx
 LINE_CHANNEL_SECRET=xxx
 OWNER_USER_IDS=xxx,yyy        # 支援多個 Owner，逗號分隔
 
-# LLM (Moonshot example)
+# LLM (Gemini example)
 OPENAI_API_KEY=sk-xxx
-OPENAI_BASE_URL=https://api.moonshot.cn/v1
-LLM_MODEL=moonshot-v1-8k
+OPENAI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
+LLM_MODEL=gemini-2.5-flash
 
-# Embedding (選一種)
-# Ollama (本地)
+# Embedding（選一種）
+# Ollama（本地 GPU）
 USE_OLLAMA_EMBEDDINGS=true
 OLLAMA_API_URL=http://host.docker.internal:11434
 OLLAMA_EMBEDDING_MODEL=bge-m3
 # 或 Gemini
 USE_GEMINI_EMBEDDINGS=true
 EMBEDDING_MODEL=embedding-001
+
+# 可選：內部 API 安全 token
+INTERNAL_API_TOKEN=your-secret-token
 ```
 
 ### Available Commands
@@ -180,6 +235,8 @@ EMBEDDING_MODEL=embedding-001
 | `/teach {內容}` | Owner | 主動教 Bot 新知識 |
 | `/memory` | Owner | 查看用戶記憶摘要 |
 | `/forget {userId}` | Owner | 清除特定用戶記憶 |
+| `/reload-owner` | Owner | 重新載入 t_settings.owner_user_ids |
+| `/set-owner <id1,id2>` | Owner | 更新 Owner 名單 |
 
 ## Deployment Steps
 
@@ -199,7 +256,7 @@ EMBEDDING_MODEL=embedding-001
 
 4. **Start services**
    ```bash
-   docker compose up -d --build
+   docker-compose up -d --build
    ```
 
 5. **Configure LINE Console**
@@ -209,26 +266,25 @@ EMBEDDING_MODEL=embedding-001
 
 6. **Identify Owner User ID**
    - Send a message to the bot
-   - Check MySQL: `SELECT user_id, display_name FROM t_users`
+   - Check MySQL: `SELECT user_id, display_name FROM t_users WHERE is_owner=1`
    - Update `.env` with `OWNER_USER_IDS`
-   - Restart: `docker compose restart webhook`
+   - 重啟 webhook：`docker-compose restart webhook-python`
 
 7. **Add knowledge documents**
    - Copy PDF/DOCX/TXT/MD files to `knowledge/`
    - Indexer auto-processes within seconds
 
-8. **(Optional) Analyze owner style**
-   ```bash
-   curl -X POST http://localhost:3000/admin/analyze-style
-   ```
+8. **Verify auto-reply settings**
+   - 預設 `auto_reply_enabled=true`，`owner_response_timeout=5`（分鐘）
+   - 可直接修改 MySQL `t_settings` 調整，或等待系統下次載入
 
 ## API Endpoints
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | /webhook | POST | LINE webhook endpoint |
-| /health | GET | Health check |
-| /stats | GET | Message/user statistics |
+| /health | GET | Health check（資料庫 + Qdrant 連線狀態）|
+| /stats | GET | Message/user statistics（需 INTERNAL_API_TOKEN）|
 | /admin/analyze-style | POST | Trigger owner style analysis |
 
 ## Troubleshooting

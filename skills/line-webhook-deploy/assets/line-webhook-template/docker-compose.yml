@@ -1,54 +1,39 @@
 version: '3.8'
 
 services:
-  webhook:
-    build: ./webhook
-    container_name: line-webhook
-    ports:
-      - "3000:3000"
+  webhook-python:
+    build:
+      context: ./webhook
+      dockerfile: Dockerfile
+    container_name: line-webhook-python
+    expose:
+      - "3000"
     environment:
-      - NODE_ENV=production
+      - TZ=Asia/Taipei
       - PORT=3000
       - DB_HOST=mysql
       - DB_PORT=3306
       - DB_NAME=linebot
       - DB_USER=linebot
       - DB_PASSWORD=${DB_PASSWORD:-linebot123}
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
       - LINE_CHANNEL_ACCESS_TOKEN=${LINE_CHANNEL_ACCESS_TOKEN}
       - LINE_CHANNEL_SECRET=${LINE_CHANNEL_SECRET}
+      - OWNER_USER_IDS=${OWNER_USER_IDS}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL}
-      - OWNER_USER_ID=${OWNER_USER_ID}
-      - AUTO_REPLY_KEYWORDS=${AUTO_REPLY_KEYWORDS}
+      - LLM_MODEL=${LLM_MODEL:-gemini-2.5-flash}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-3-small}
+      - USE_OLLAMA_EMBEDDINGS=${USE_OLLAMA_EMBEDDINGS:-false}
+      - OLLAMA_API_URL=${OLLAMA_API_URL}
+      - OLLAMA_EMBEDDING_MODEL=${OLLAMA_EMBEDDING_MODEL:-bge-m3}
+      - USE_GEMINI_EMBEDDINGS=${USE_GEMINI_EMBEDDINGS:-false}
       - KNOWLEDGE_BASE_DIR=/app/knowledge
+      - INTERNAL_API_TOKEN=${INTERNAL_API_TOKEN:-change-me-in-production}
+      - VIRTUAL_PORT=3000
     volumes:
       - ./knowledge:/app/knowledge:ro
-      - ./logs:/app/logs
-    depends_on:
-      mysql:
-        condition: service_healthy
-      qdrant:
-        condition: service_started
-    networks:
-      - linebot-network
-    restart: unless-stopped
-
-  ngrok:
-    image: ngrok/ngrok:latest
-    container_name: line-ngrok
-    command:
-      - "start"
-      - "--all"
-      - "--config"
-      - "/etc/ngrok.yml"
-    environment:
-      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
-    volumes:
-      - ./ngrok.yml:/etc/ngrok.yml:ro
-    ports:
-      - "4040:4040"
-    depends_on:
-      - webhook
     networks:
       - linebot-network
     restart: unless-stopped
@@ -56,16 +41,24 @@ services:
   mysql:
     image: mysql:8.0
     container_name: line-mysql
+    command: >
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_general_ci
+      --init-connect='SET NAMES utf8mb4'
+      --skip-character-set-client-handshake
     environment:
       - MYSQL_ROOT_PASSWORD=${DB_ROOT_PASSWORD:-root123}
       - MYSQL_DATABASE=linebot
       - MYSQL_USER=linebot
       - MYSQL_PASSWORD=${DB_PASSWORD:-linebot123}
+      - MYSQL_CHARSET=utf8mb4
+      - MYSQL_COLLATION=utf8mb4_general_ci
+      - TZ=Asia/Taipei
     volumes:
       - mysql-data:/var/lib/mysql
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     ports:
-      - "3307:3306"
+      - "13306:3306"
     networks:
       - linebot-network
     healthcheck:
@@ -86,19 +79,33 @@ services:
       - linebot-network
     restart: unless-stopped
 
-  indexer:
-    build: ./indexer
-    container_name: line-indexer
+  indexer-python:
+    build:
+      context: ./webhook
+      dockerfile: Dockerfile
+    container_name: line-indexer-python
+    command: ["python", "-m", "app.scripts.run_indexer", "--watch"]
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.scripts.health_indexer"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     environment:
+      - TZ=Asia/Taipei
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_NAME=linebot
+      - DB_USER=linebot
+      - DB_PASSWORD=${DB_PASSWORD:-linebot123}
       - QDRANT_HOST=qdrant
       - QDRANT_PORT=6333
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-3-small}
       - KNOWLEDGE_BASE_DIR=/app/knowledge
     volumes:
-      - ./knowledge:/app/knowledge
-    depends_on:
-      - qdrant
+      - ./knowledge:/app/knowledge:ro
     networks:
       - linebot-network
     restart: unless-stopped
